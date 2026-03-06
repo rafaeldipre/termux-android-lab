@@ -1,6 +1,6 @@
 # 📱 Termux Android Lab
 
-> Two ready-to-run desktop environments for Android — a full **Ubuntu 24.04 LTS** workspace and a **Mobile HackLab** — both powered by Termux + proot-distro + Termux-X11.
+> Two ready-to-run desktop environments for Android — a full **Ubuntu 24.04 LTS** workspace and a **Mobile HackLab** — both powered by Termux + Termux-X11.
 
 <div align="center">
 
@@ -32,6 +32,7 @@
 | Metasploit Framework | ❌ | ✅ |
 | Hacking tools menu | ❌ | ✅ |
 | Intended use | 🛠 Development | 🔒 Security research |
+| **Authorship** | 🆕 Original | 🔧 Fork + hardened |
 
 ---
 
@@ -82,7 +83,9 @@ curl -sL https://raw.githubusercontent.com/rafaeldipre/termux-android-lab/main/u
 
 ## 🐧 Ubuntu Desktop
 
-A clean, productivity-focused Ubuntu 24.04 LTS environment for development and daily use on Android.
+> **Original project** by [@rafaeldipre](https://github.com/rafaeldipre), developed in collaboration with Claude (Anthropic).
+
+A clean, productivity-focused Ubuntu 24.04 LTS environment for development and daily use on Android. Runs Ubuntu inside a proot container managed by proot-distro, with XFCE4 as the graphical desktop.
 
 ### What gets installed
 
@@ -152,6 +155,9 @@ curl -sL https://raw.githubusercontent.com/rafaeldipre/termux-android-lab/main/u
 
 ## 🔴 Mobile HackLab
 
+> **Based on** [jarvesusaram99/termux-hacklab](https://github.com/jarvesusaram99/termux-hacklab) by [@jarvesusaram99](https://github.com/jarvesusaram99) — original concept and structure.
+> **Modified and hardened** by [@rafaeldipre](https://github.com/rafaeldipre). See [changes](#-changes-from-the-original) below.
+
 A security research and penetration testing environment running directly in Termux (no proot needed).
 
 > ⚠️ **For educational and authorized security testing only.** Always obtain explicit permission before testing systems you do not own.
@@ -204,9 +210,9 @@ bash ~/stop-hacklab.sh
 ### Quick tools menu options
 
 ```
-1) Nmap     — network scan (with input validation)
-2) SQLMap   — SQL injection test (URL validated, no auto-batch)
-3) Hydra    — credential attack (manual mode)
+1) Nmap       — network scan     (input validated: alphanum/dots/dashes only)
+2) SQLMap     — SQL injection     (URL validated: must start with http/https)
+3) Hydra      — credential test  (manual mode, shows usage example)
 4) Metasploit — msfconsole
 5) Start Desktop
 6) Check GPU status
@@ -222,6 +228,32 @@ curl -sL https://raw.githubusercontent.com/rafaeldipre/termux-android-lab/main/u
 
 ---
 
+## 🔧 Changes from the Original
+
+The following modifications were applied to [jarvesusaram99/termux-hacklab](https://github.com/jarvesusaram99/termux-hacklab):
+
+### Bug fixes
+| # | Location | Problem | Fix |
+|---|----------|---------|-----|
+| 1 | `show_banner()` | Orphaned `BANNER` delimiter after heredoc caused syntax error | Removed duplicate line |
+| 2 | `spinner()` | Race condition — spinner never showed if process finished before first loop iteration | Added initial `printf` before the `while` loop |
+| 3 | `install_pkg()` | `$pkg` and `$!` unquoted — word-splitting risk | Added double-quotes around all variables |
+| 4 | `step_metasploit` | Function called in `main()` but never defined — fatal crash | Implemented `step_metasploit()` with `install_pkg "metasploit"` |
+
+### Security hardening
+| # | Location | Problem | Fix |
+|---|----------|---------|-----|
+| 5 | `detect_device()` | GPU driver selected by device brand (Samsung → Adreno assumed) — wrong for Mali devices | Detection now uses only `ro.hardware.egl` hardware property |
+| 6 | `hacktools.sh` → option 1 | `nmap -sV $target` — unquoted, unsanitized user input allows command injection | Input validated with regex `^[a-zA-Z0-9._/-]+$` before use |
+| 7 | `hacktools.sh` → option 2 | `sqlmap -u "$url" --batch` — no URL validation; `--batch` skips all user confirmations | Added `^https?://` regex check; removed `--batch` flag |
+| 8 | `start-hacklab.sh` | `auth-anonymous=1` in PulseAudio TCP module — allows unauthenticated audio connections | Removed `auth-anonymous=1`; keeps `auth-ip-acl=127.0.0.1` |
+| 9 | `start/stop-hacklab.sh` | `pkill -9` used as first signal — processes have no chance to clean up | Changed to SIGTERM → `sleep 1` → SIGKILL in both scripts |
+| 10 | `step_wine()` | `ln -sf` ran unconditionally — creates broken symlinks if installation failed | Added `[ -f "$wine_bin" ]` existence check before linking |
+| 11 | `step_launchers()` | `MESA_NO_ERROR=1` in GPU config silently disabled all OpenGL error reporting | Variable removed from config |
+| 12 | `start-hacklab.sh` | `exec startxfce4` — if XFCE4 crashes nothing runs after it, no error message shown | Replaced with `startxfce4 \|\| echo "⚠ XFCE4 exited..."` |
+
+---
+
 ## 🎮 GPU Acceleration
 
 Both versions automatically detect your GPU at install time:
@@ -231,7 +263,7 @@ Both versions automatically detect your GPU at install time:
 | Adreno (Qualcomm Snapdragon) | Turnip / freedreno | Full hardware acceleration |
 | Mali / PowerVR / other | swrast | Software rendering |
 
-Detection uses the Android system property `ro.hardware.egl` — no brand-based guessing.
+Detection reads the Android system property `ro.hardware.egl` directly — no brand-based guessing.
 
 ---
 
@@ -241,26 +273,25 @@ Detection uses the Android system property `ro.hardware.egl` — no brand-based 
 termux-android-lab/
 │
 ├── README.md               ← You are here
-├── install.sh              ← HackLab installer
+├── LICENSE
+├── install.sh              ← HackLab installer  (fork of jarvesusaram99)
 ├── uninstall.sh            ← HackLab uninstaller
 │
 └── ubuntu-desktop/
-    ├── install.sh          ← Ubuntu Desktop installer
+    ├── install.sh          ← Ubuntu Desktop installer  (original)
     ├── uninstall.sh        ← Ubuntu Desktop uninstaller
     └── README.md           ← Ubuntu Desktop documentation
 ```
 
 ---
 
-## 🔒 Security Notes
+## 🔒 Security Notes (applied to both versions)
 
-Both scripts were reviewed and hardened:
-
-- **No command injection** — all user inputs (IPs, URLs) are validated with regex before being passed to tools
-- **No anonymous audio** — PulseAudio TCP restricted to `127.0.0.1` without `auth-anonymous`
-- **Graceful process shutdown** — SIGTERM first, then SIGKILL after a 1-second wait
-- **Symlinks verified** — Wine symlinks are only created if the binary actually exists
-- **No `MESA_NO_ERROR`** — OpenGL error checking is preserved for diagnostics
+- **No command injection** — user inputs (IPs, URLs) are validated with regex before being passed to tools
+- **No anonymous audio** — PulseAudio TCP restricted to `127.0.0.1`, no `auth-anonymous`
+- **Graceful process shutdown** — SIGTERM first, SIGKILL only after a 1-second grace period
+- **Symlinks verified** — Wine symlinks created only if the binary actually exists
+- **No `MESA_NO_ERROR`** — OpenGL error checking kept active for diagnostics
 - **Quoted variables** — all shell variables are properly quoted throughout
 
 ---
@@ -271,7 +302,13 @@ Pull requests are welcome. For major changes, please open an issue first.
 
 ---
 
-## 📺 Author
+## 📺 Credits
+
+| Project | Author | Role |
+|---------|--------|------|
+| [termux-hacklab](https://github.com/jarvesusaram99/termux-hacklab) | [@jarvesusaram99](https://github.com/jarvesusaram99) | Original HackLab concept and script |
+| Ubuntu Desktop | [@rafaeldipre](https://github.com/rafaeldipre) + Claude (Anthropic) | Original work |
+| Security hardening & fork | [@rafaeldipre](https://github.com/rafaeldipre) | Bug fixes + vulnerability patches on HackLab |
 
 **Tech Jarves** — [youtube.com/@TechJarves](https://youtube.com/@TechJarves)
 
