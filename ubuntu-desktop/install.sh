@@ -96,11 +96,17 @@ ubuntu_run() {
 }
 
 # Run inline command inside Ubuntu proot with spinner
+# Output goes to a log file so errors are visible on failure
 ubuntu_cmd() {
     local message=$1
     local script_file=$2
-    (proot-distro login ubuntu --shared-tmp -- bash "$script_file" > /dev/null 2>&1) &
+    local log="/tmp/ubuntu_install.log"
+    (proot-distro login ubuntu --shared-tmp -- bash "$script_file" >> "$log" 2>&1) &
     spinner "$!" "$message"
+    local result=$?
+    if [ $result -ne 0 ]; then
+        echo -e "  ${YELLOW}⚠${NC} Step failed. See details: ${GRAY}cat /tmp/ubuntu_install.log${NC}"
+    fi
 }
 
 # ============== BANNER ==============
@@ -394,9 +400,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Launch Ubuntu XFCE4
+# Use bash --login so /etc/profile is sourced and PATH includes /usr/bin
 proot-distro login ubuntu --shared-tmp -- \
-    env DISPLAY=:1 PULSE_SERVER=127.0.0.1 \
-    startxfce4 \
+    bash --login -c "export DISPLAY=:1; export PULSE_SERVER=127.0.0.1; startxfce4" \
     || echo -e "\n⚠ XFCE4 exited unexpectedly. Check: cat ~/.xsession-errors"
 LAUNCHEREOF
 
