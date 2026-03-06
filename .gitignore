@@ -1,0 +1,9 @@
+# Claude Code internal files
+.claude/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Temporary shell scripts created during install
+/tmp/

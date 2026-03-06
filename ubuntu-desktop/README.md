@@ -1,0 +1,265 @@
+# 🐧 Ubuntu Desktop for Android
+
+> Full Ubuntu 24.04 LTS desktop environment running on Android via Termux + proot-distro.
+
+---
+
+## Overview
+
+This project installs a complete Ubuntu 24.04 LTS graphical desktop on any Android device using Termux. It uses **proot-distro** to run a real Ubuntu environment and **Termux-X11** as the display server, with GPU acceleration, sound, and Windows app support.
+
+**No hacking tools included** — this is a clean productivity and development environment.
+
+---
+
+## Requirements
+
+| Item | Minimum |
+|------|---------|
+| Android version | 8.0+ |
+| RAM | 3 GB free |
+| Storage | 8 GB free |
+| Internet | Stable connection (~1 GB download) |
+| App | [Termux (F-Droid)](https://f-droid.org/packages/com.termux/) |
+| App | [Termux-X11 (GitHub)](https://github.com/termux/termux-x11/releases) |
+
+> **Important:** Install Termux from **F-Droid**, not the Play Store. The Play Store version is outdated and will not work.
+
+---
+
+## Installation
+
+1. Open **Termux** and copy the `ubuntu-desktop/` folder to your device, or run:
+
+   ```bash
+   # Clone or copy the folder, then:
+   cd ubuntu-desktop
+   chmod +x install.sh
+   bash install.sh
+   ```
+
+2. Press **Enter** when prompted to start the installation.
+
+3. Wait 25–45 minutes (depends on internet speed).
+
+4. When complete, follow the on-screen instructions to start the desktop.
+
+---
+
+## Starting the Desktop
+
+### Step 1 — Open Termux-X11
+Launch the **Termux-X11** app on your Android device. Leave it open in the background.
+
+### Step 2 — Run the launcher in Termux
+```bash
+bash ~/start-ubuntu.sh
+```
+
+### Step 3 — Switch to Termux-X11
+Tap the Termux-X11 app icon. The XFCE4 desktop will appear.
+
+---
+
+## Stopping the Desktop
+
+```bash
+bash ~/stop-ubuntu.sh
+```
+
+This gracefully terminates XFCE4, PulseAudio, and the X11 server.
+
+---
+
+## Ubuntu Shell (CLI only)
+
+To enter the Ubuntu environment without starting the graphical desktop:
+
+```bash
+proot-distro login ubuntu
+```
+
+From here you can install packages with `apt`, run Python scripts, use SSH, etc.
+
+---
+
+## Included Software
+
+### Inside Ubuntu (proot)
+| Software | Description |
+|----------|-------------|
+| **XFCE4** | Lightweight desktop environment |
+| **xfce4-terminal** | Built-in terminal |
+| **Thunar** | Graphical file manager |
+| **Mousepad** | Text editor |
+| **Firefox** | Web browser |
+| **VS Code** | Code editor (Microsoft ARM64) |
+| **Python 3** | Python + pip + venv |
+| **OpenSSH** | SSH server (port 2222) |
+| **Bluetooth** | bluez + blueman GUI manager |
+
+### In Termux (host)
+| Software | Description |
+|----------|-------------|
+| **Termux-X11** | X11 display server for Android |
+| **PulseAudio** | Sound server |
+| **Mesa Zink** | OpenGL over Vulkan |
+| **Turnip / swrast** | Vulkan driver (GPU-dependent) |
+| **Wine/Hangover** | Run Windows `.exe` apps |
+
+---
+
+## Running Windows Apps (.exe)
+
+Wine is installed in the Termux host. To run a Windows application, open a Termux terminal inside the XFCE4 desktop and run:
+
+```bash
+wine /path/to/application.exe
+```
+
+To open the Wine configuration GUI:
+```bash
+winecfg
+```
+
+> **Note:** Wine/Hangover on ARM supports many 64-bit Windows applications. 32-bit support may require additional configuration.
+
+---
+
+## OpenSSH — Connect via SSH
+
+Inside Ubuntu, start the SSH server:
+
+```bash
+service ssh start
+# or
+/usr/sbin/sshd
+```
+
+Then connect from another device on the same Wi-Fi network:
+
+```bash
+ssh root@<android-ip> -p 2222
+```
+
+Find your Android IP with:
+```bash
+ip addr show | grep "inet "
+```
+
+---
+
+## Bluetooth
+
+Bluetooth hardware access from within a proot container depends on Android's Bluetooth stack. To use Bluetooth:
+
+1. Open the **Blueman Manager** from the desktop (Bluetooth shortcut).
+2. If devices are not detected, start the bluetooth service:
+   ```bash
+   # Inside proot-distro login ubuntu
+   service bluetooth start
+   ```
+3. On some devices, additional host-level access may be required. Refer to your device's documentation.
+
+---
+
+## VS Code
+
+Launch VS Code from the desktop shortcut or from a terminal inside Ubuntu:
+
+```bash
+code --no-sandbox
+```
+
+> The `--no-sandbox` flag is required because VS Code's sandbox is incompatible with proot environments.
+
+---
+
+## GPU Acceleration
+
+GPU acceleration is configured automatically at install time based on your device's hardware:
+
+| GPU | Driver | Status |
+|-----|--------|--------|
+| Adreno (Qualcomm) | Turnip (freedreno) | Full acceleration |
+| Mali / other | swrast (software) | Software rendering |
+
+The GPU environment is loaded automatically via `~/.config/ubuntu-desktop-gpu.sh`.
+
+To check your active renderer:
+```bash
+# Inside a Termux terminal (with DISPLAY set)
+glxinfo | grep "renderer"
+```
+
+---
+
+## File Structure
+
+```
+ubuntu-desktop/
+├── install.sh      — Main installer script
+├── uninstall.sh    — Complete removal script
+└── README.md       — This documentation
+
+Generated by install.sh (in Termux home):
+~/start-ubuntu.sh               — Start the desktop
+~/stop-ubuntu.sh                — Stop the desktop
+~/.config/ubuntu-desktop-gpu.sh — GPU environment variables
+```
+
+---
+
+## Uninstallation
+
+To completely remove Ubuntu Desktop and all related packages:
+
+```bash
+cd ubuntu-desktop
+bash uninstall.sh
+```
+
+Type `yes` when prompted. This removes:
+- The Ubuntu 24.04 rootfs (~3–5 GB)
+- All launcher scripts and GPU config
+- All Termux host packages (mesa, vulkan, pulseaudio, wine, termux-x11…)
+- The GPU env entry from `~/.bashrc`
+
+> **Warning:** All files stored inside Ubuntu will be permanently deleted.
+
+---
+
+## Troubleshooting
+
+### Black screen in Termux-X11
+- Make sure Termux-X11 is open **before** running `start-ubuntu.sh`
+- Try stopping and restarting: `bash ~/stop-ubuntu.sh && bash ~/start-ubuntu.sh`
+
+### No sound
+- PulseAudio starts automatically. If audio is missing, restart it:
+  ```bash
+  pulseaudio --kill && pulseaudio --start --exit-idle-time=-1
+  ```
+
+### XFCE4 crashes on launch
+- Check the log: `cat ~/.xsession-errors`
+- Try re-running the installer for the desktop step:
+  ```bash
+  proot-distro login ubuntu -- bash -c "apt install --reinstall xfce4 -y"
+  ```
+
+### VS Code won't open
+- Ensure you always launch it with `--no-sandbox`:
+  ```bash
+  code --no-sandbox
+  ```
+
+### Out of storage during install
+- Free at least 8 GB before starting
+- The Ubuntu rootfs alone uses ~3–5 GB after packages are installed
+
+---
+
+## Author
+
+**Tech Jarves** — [youtube.com/@TechJarves](https://youtube.com/@TechJarves)
