@@ -401,8 +401,25 @@ INNEREOF
     cat > "${UBUNTU_ROOTFS}/tmp/ubuntu_vscode_setup.sh" << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
+
+# Skip if already installed (idempotent re-runs)
+if command -v code >/dev/null 2>&1; then
+    echo "VS Code already installed, skipping"
+    exit 0
+fi
+
+# Clean up any conflicting keyring/source files from previous installs.
+# On re-runs, apt errors with "Conflicting values for Signed-By" if two
+# different .gpg files claim the same Microsoft repo URL.
+rm -f /usr/share/keyrings/microsoft-archive-keyring.gpg \
+      /usr/share/keyrings/microsoft.gpg \
+      /etc/apt/sources.list.d/vscode.list \
+      /etc/apt/sources.list.d/vscode.list~
+
+# Add Microsoft signing key (--batch --yes: overwrite without interactive prompt)
 wget -qO- https://packages.microsoft.com/keys/microsoft.asc \
-    | gpg --dearmor -o /usr/share/keyrings/microsoft-archive-keyring.gpg
+    | gpg --batch --yes --dearmor \
+          -o /usr/share/keyrings/microsoft-archive-keyring.gpg
 echo "deb [arch=arm64 signed-by=/usr/share/keyrings/microsoft-archive-keyring.gpg] \
 https://packages.microsoft.com/repos/code stable main" \
     > /etc/apt/sources.list.d/vscode.list
@@ -462,6 +479,50 @@ GPUEOF
     fi
     echo -e "  ${GREEN}✓${NC} GPU config written"
 
+    # ── Write XFCE4 startup script INSIDE Ubuntu's rootfs ───────────────────
+    # WHY A SEPARATE SCRIPT IN THE ROOTFS (not bash --login -c '...'):
+    #   bash --login sources /etc/profile and /etc/profile.d/* which can reset or
+    #   corrupt environment variables like DISPLAY before our exports take effect.
+    #   dbus-launch --exit-with-session then passes this broken env to xfce4-session
+    #   resulting in "Cannot open display: ." even when DISPLAY=:1 was exported.
+    #
+    #   By writing a standalone script to /usr/local/bin/ubuntu-desktop-start.sh
+    #   and running it with "proot-distro login ubuntu -- /usr/local/bin/...",
+    #   proot runs the script directly — no login shell, no env interference.
+    #   DISPLAY=:1 is set at line 1 and stays set until xfce4-session starts.
+    # ─────────────────────────────────────────────────────────────────────────
+    mkdir -p "${UBUNTU_ROOTFS}/usr/local/bin"
+    cat > "${UBUNTU_ROOTFS}/usr/local/bin/ubuntu-desktop-start.sh" << 'XFCEEOF'
+#!/bin/bash
+# ── Environment ────────────────────────────────────────────────────────────
+export DISPLAY=:1
+export PULSE_SERVER=127.0.0.1
+export GDK_BACKEND=x11
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# ── D-Bus machine-id ────────────────────────────────────────────────────────
+# base-files creates /etc/machine-id empty; systemd would fill it on first boot
+# but systemd doesn't run in proot — we generate it here every time it's empty.
+if [ ! -s /etc/machine-id ]; then
+    dbus-uuidgen > /etc/machine-id 2>/dev/null
+fi
+mkdir -p /var/lib/dbus
+[ -e /var/lib/dbus/machine-id ] || ln -sf /etc/machine-id /var/lib/dbus/machine-id
+
+# ── Start XFCE4 with D-Bus session bus ─────────────────────────────────────
+# dbus-run-session (preferred): starts daemon, runs child, cleans up on exit.
+# Falls back to dbus-launch --sh-syntax eval for older dbus versions.
+if command -v dbus-run-session >/dev/null 2>&1; then
+    exec dbus-run-session xfce4-session
+else
+    eval "$(dbus-launch --sh-syntax)"
+    exec xfce4-session
+fi
+XFCEEOF
+    chmod +x "${UBUNTU_ROOTFS}/usr/local/bin/ubuntu-desktop-start.sh"
+    echo -e "  ${GREEN}✓${NC} XFCE4 startup script written to Ubuntu rootfs"
+    # ─────────────────────────────────────────────────────────────────────────
+
     # --- start-ubuntu.sh ---
     cat > ~/start-ubuntu.sh << 'LAUNCHEREOF'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -484,13 +545,11 @@ echo "🔊 Starting PulseAudio..."
 pulseaudio --start --exit-idle-time=-1
 sleep 1
 pactl load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1 2>/dev/null
-export PULSE_SERVER=127.0.0.1
 
 # X11
 echo "📺 Starting X11 display server..."
 termux-x11 :1 -ac &
 sleep 3
-export DISPLAY=:1
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -499,35 +558,11 @@ echo "  🔊 Audio is enabled!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Launch Ubuntu XFCE4 desktop
-# ─────────────────────────────────────────────────────────────────────────────
-# WHY NOT startxfce4:
-#   startxfce4 is a wrapper that tries to start its OWN X server via xinit.
-#   Since Termux-X11 is already running on :1, startxfce4 errors:
-#     "X server already running on display :1"
-#   We do NOT want to start a new X server — we want to connect to the existing one.
-#
-# CORRECT APPROACH: run xfce4-session directly with dbus-launch.
-#   dbus-launch creates a D-Bus session bus and starts xfce4-session inside it.
-#   xfce4-session handles starting xfwm4, xfce4-panel, xfdesktop, etc. itself.
-# ─────────────────────────────────────────────────────────────────────────────
-proot-distro login ubuntu -- bash --login -c '
-    export DISPLAY=:1
-    export PULSE_SERVER=127.0.0.1
-
-    # ── Ensure D-Bus machine-id is valid (must happen before dbus-launch) ───
-    # /etc/machine-id is created empty by base-files. Systemd fills it on first
-    # boot but systemd does not run in proot. Without a valid 32-char hex UUID,
-    # dbus-daemon aborts and xfce4-session loses DISPLAY — "Cannot open display: ."
-    if [ ! -s /etc/machine-id ]; then
-        dbus-uuidgen > /etc/machine-id 2>/dev/null
-        mkdir -p /var/lib/dbus
-        ln -sf /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null
-    fi
-    # ────────────────────────────────────────────────────────────────────────
-
-    exec dbus-launch --exit-with-session xfce4-session
-' || echo -e "\n⚠ XFCE4 exited unexpectedly. Check: cat ~/.xsession-errors"
+# Launch Ubuntu XFCE4 via the startup script inside the Ubuntu rootfs.
+# The script sets DISPLAY=:1 at its very first line — no bash --login
+# env interference, no dbus-launch arg-passing issues.
+proot-distro login ubuntu -- /usr/local/bin/ubuntu-desktop-start.sh \
+    || echo -e "\n⚠ XFCE4 exited unexpectedly. Check: cat ~/.xsession-errors"
 LAUNCHEREOF
 
     chmod +x ~/start-ubuntu.sh
