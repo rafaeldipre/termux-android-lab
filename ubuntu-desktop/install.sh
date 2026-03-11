@@ -243,8 +243,9 @@ step_proot_ubuntu() {
     install_pkg "proot-distro" "proot-distro"
     install_pkg "wget"         "wget"
 
-    local rootfs_dir="$HOME/.local/share/proot-distro/installed-rootfs/ubuntu"
-    if [ -d "$rootfs_dir" ]; then
+    # proot-distro stores rootfs at $PREFIX/var/lib/proot-distro/installed-rootfs/
+    # (same path we use as UBUNTU_ROOTFS — must stay in sync)
+    if [ -d "${UBUNTU_ROOTFS}" ]; then
         echo -e "  ${GREEN}✓${NC} Ubuntu rootfs already present, skipping download"
     else
         (proot-distro install ubuntu > /dev/null 2>&1) &
@@ -282,6 +283,17 @@ apt-get install -y -q --no-install-recommends \
     ca-certificates curl gpg wget
 locale-gen en_US.UTF-8
 update-locale LANG=en_US.UTF-8
+
+# ── D-Bus machine-id ───────────────────────────────────────────────────────
+# base-files creates /etc/machine-id as an empty placeholder.
+# In a real system systemd fills it on first boot; in proot systemd never runs.
+# dbus-launch (used by XFCE4 startup) REQUIRES a valid 32-char hex UUID here.
+# We generate it explicitly with dbus-uuidgen right after dbus-x11 is installed.
+dbus-uuidgen > /etc/machine-id 2>/dev/null || true
+mkdir -p /var/lib/dbus
+ln -sf /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
+echo "  [setup] D-Bus machine-id: $(cat /etc/machine-id 2>/dev/null)"
+# ──────────────────────────────────────────────────────────────────────────
 INNEREOF
 
     ubuntu_cmd "Updating Ubuntu and configuring system..." /tmp/ubuntu_base_setup.sh
@@ -499,12 +511,23 @@ echo ""
 #   dbus-launch creates a D-Bus session bus and starts xfce4-session inside it.
 #   xfce4-session handles starting xfwm4, xfce4-panel, xfdesktop, etc. itself.
 # ─────────────────────────────────────────────────────────────────────────────
-proot-distro login ubuntu -- \
-    bash --login -c "
-        export DISPLAY=:1
-        export PULSE_SERVER=127.0.0.1
-        exec dbus-launch --exit-with-session xfce4-session
-    " || echo -e "\n⚠ XFCE4 exited unexpectedly. Check: cat ~/.xsession-errors"
+proot-distro login ubuntu -- bash --login -c '
+    export DISPLAY=:1
+    export PULSE_SERVER=127.0.0.1
+
+    # ── Ensure D-Bus machine-id is valid (must happen before dbus-launch) ───
+    # /etc/machine-id is created empty by base-files. Systemd fills it on first
+    # boot but systemd does not run in proot. Without a valid 32-char hex UUID,
+    # dbus-daemon aborts and xfce4-session loses DISPLAY — "Cannot open display: ."
+    if [ ! -s /etc/machine-id ]; then
+        dbus-uuidgen > /etc/machine-id 2>/dev/null
+        mkdir -p /var/lib/dbus
+        ln -sf /etc/machine-id /var/lib/dbus/machine-id 2>/dev/null
+    fi
+    # ────────────────────────────────────────────────────────────────────────
+
+    exec dbus-launch --exit-with-session xfce4-session
+' || echo -e "\n⚠ XFCE4 exited unexpectedly. Check: cat ~/.xsession-errors"
 LAUNCHEREOF
 
     chmod +x ~/start-ubuntu.sh
