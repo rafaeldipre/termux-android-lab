@@ -110,7 +110,8 @@ confirm_uninstall() {
     echo ""
     echo -e "${RED}  This action cannot be undone.${NC}"
     echo ""
-    read -rp "  Type 'yes' to confirm uninstall, or press Ctrl+C to cancel: " confirm
+    # /dev/tty ensures input works even when script is piped via curl | bash
+    read -rp "  Type 'yes' to confirm uninstall, or press Ctrl+C to cancel: " confirm < /dev/tty
     if [[ "$confirm" != "yes" ]]; then
         echo -e "\n${GREEN}  Uninstall cancelled.${NC}\n"
         exit 0

@@ -558,7 +558,8 @@ main() {
     echo -e "${GRAY}  Estimated time: 15-30 minutes (depends on internet speed)${NC}"
     echo ""
     echo -e "${YELLOW}  Press Enter to start installation, or Ctrl+C to cancel...${NC}"
-    read
+    # /dev/tty ensures input works even when script is piped via curl | bash
+    read -r < /dev/tty
     
     # Run all steps
     detect_device
