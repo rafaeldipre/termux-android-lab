@@ -105,8 +105,13 @@ ubuntu_cmd() {
     spinner "$!" "$message"
     local result=$?
     if [ $result -ne 0 ]; then
-        echo -e "  ${YELLOW}⚠${NC} Step failed. See details: ${GRAY}cat /tmp/ubuntu_install.log${NC}"
+        echo -e "  ${YELLOW}⚠${NC} Step failed. Last log output:"
+        tail -5 "$log" 2>/dev/null | while IFS= read -r line; do
+            echo -e "    ${GRAY}${line}${NC}"
+        done
+        echo -e "  ${GRAY}Full log: cat /tmp/ubuntu_install.log${NC}"
     fi
+    return $result
 }
 
 # ============== BANNER ==============
@@ -238,11 +243,24 @@ step_ubuntu_base() {
     cat > /tmp/ubuntu_base_setup.sh << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
-apt update -y
-apt upgrade -y
-apt install -y \
+export DEBCONF_NOWARNINGS=yes
+
+# ── proot compatibility fix ────────────────────────────────────────────────
+# dpkg post-install scripts call invoke-rc.d to start services.
+# In proot there is no real init, so those calls hang forever (the "50% bug").
+# policy-rc.d returning 101 tells invoke-rc.d to skip all service starts.
+# This is the same technique Docker uses for container builds.
+mkdir -p /usr/sbin
+echo '#!/bin/sh
+exit 101' > /usr/sbin/policy-rc.d
+chmod +x /usr/sbin/policy-rc.d
+# ──────────────────────────────────────────────────────────────────────────
+
+apt-get update -y -q
+apt-get upgrade -y -q
+apt-get install -y -q --no-install-recommends \
     locales tzdata \
-    dbus-x11 at-spi2-core \
+    dbus-x11 \
     ca-certificates curl gpg wget
 locale-gen en_US.UTF-8
 update-locale LANG=en_US.UTF-8
@@ -261,26 +279,67 @@ step_ubuntu_desktop() {
     cat > /tmp/ubuntu_desktop_setup.sh << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
-# Install XFCE4 components individually with --no-install-recommends to avoid
-# pulling in xserver-xorg-* packages (not needed: Termux-X11 is the display server)
-apt install -y --no-install-recommends \
+export DEBCONF_NOWARNINGS=yes
+
+# ── PART 1: Core XFCE4 session ─────────────────────────────────────────────
+# --no-install-recommends prevents xorg/xserver-xorg-* from being pulled in.
+# Termux-X11 is the display server — xorg packages are NOT needed in proot.
+# policy-rc.d (set in step 7) ensures dpkg does NOT try to start any service.
+apt-get install -y -q --no-install-recommends \
     xfce4-session \
     xfwm4 \
     xfce4-panel \
     xfce4-settings \
     xfdesktop4 \
+    dbus-x11
+
+# ── PART 2: XFCE4 apps & UI extras ─────────────────────────────────────────
+apt-get install -y -q --no-install-recommends \
     xfce4-terminal \
     xfce4-notifyd \
     thunar \
     mousepad \
-    dbus-x11 \
-    at-spi2-core \
-    fonts-dejavu \
+    fonts-dejavu-core \
     adwaita-icon-theme
+
+# ── PART 3: Developer essentials ────────────────────────────────────────────
+apt-get install -y -q --no-install-recommends \
+    git \
+    curl \
+    unzip
+
+# ── VERIFY: startxfce4 must exist ───────────────────────────────────────────
+if ! command -v startxfce4 >/dev/null 2>&1; then
+    echo "FATAL: startxfce4 not found after installation!" >&2
+    echo "Hint: check apt-get install output above for errors." >&2
+    exit 1
+fi
+echo "SUCCESS: startxfce4 verified at $(command -v startxfce4)"
 INNEREOF
 
-    ubuntu_cmd "Installing XFCE4 desktop (minimal, no X server)..." /tmp/ubuntu_desktop_setup.sh
+    ubuntu_cmd "Installing XFCE4 desktop (core session)..." /tmp/ubuntu_desktop_setup.sh
+    local xfce4_result=$?
     rm -f /tmp/ubuntu_desktop_setup.sh
+
+    # External verification — shows clearly whether XFCE4 is ready to launch
+    local verify_script="/tmp/ubuntu_xfce4_verify.sh"
+    cat > "$verify_script" << 'VERIFYEOF'
+#!/bin/bash
+command -v startxfce4 >/dev/null 2>&1
+VERIFYEOF
+
+    if proot-distro login ubuntu --shared-tmp -- bash "$verify_script" > /dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} XFCE4 ready — startxfce4 found inside Ubuntu"
+    else
+        echo -e "  ${RED}✗${NC} XFCE4 not found inside Ubuntu!"
+        echo ""
+        echo -e "  ${YELLOW}Manual fix:${NC}"
+        echo -e "  ${GRAY}  proot-distro login ubuntu${NC}"
+        echo -e "  ${GRAY}  apt-get install -y --no-install-recommends xfce4-session xfwm4 xfce4-panel xfce4-settings xfdesktop4 dbus-x11${NC}"
+        echo ""
+        echo -e "  ${GRAY}Install log: cat /tmp/ubuntu_install.log${NC}"
+    fi
+    rm -f "$verify_script"
 
     cat > /tmp/ubuntu_firefox_setup.sh << 'INNEREOF'
 #!/bin/bash
@@ -529,6 +588,7 @@ COMPLETE
     echo -e "   • Firefox Browser"
     echo -e "   • VS Code"
     echo -e "   • Python 3 + pip + venv"
+    echo -e "   • Git + cURL + unzip"
     echo -e "   • OpenSSH (port 2222)"
     echo -e "   • Bluetooth (bluez + blueman)"
     echo ""
