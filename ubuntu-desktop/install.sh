@@ -25,6 +25,12 @@ TOTAL_STEPS=10
 CURRENT_STEP=0
 GPU_DRIVER="swrast"   # set in step_gpu_wine
 
+# Termux prefix and Ubuntu rootfs paths (used to write setup scripts directly
+# into the Ubuntu container's filesystem — avoids ALL /tmp permission issues)
+PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+UBUNTU_ROOTFS="${PREFIX}/var/lib/proot-distro/installed-rootfs/ubuntu"
+INSTALL_LOG="${HOME}/.ubuntu_install.log"
+
 # ============== COLORS ==============
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -89,19 +95,31 @@ install_pkg() {
     spinner "$!" "Installing ${name}..."
 }
 
-# Run a script file inside Ubuntu proot
+# Run a script file inside Ubuntu proot (script_file is the Ubuntu-side path)
 ubuntu_run() {
     local script_file=$1
-    proot-distro login ubuntu --shared-tmp -- bash "$script_file"
+    proot-distro login ubuntu -- bash "$script_file"
 }
 
-# Run inline command inside Ubuntu proot with spinner
-# Output goes to a log file so errors are visible on failure
+# Run a setup script inside Ubuntu proot with a spinner.
+#
+# WHY NO --shared-tmp:
+#   proot --shared-tmp binds Termux's $TMPDIR as Ubuntu's /tmp.
+#   When apt runs inside Ubuntu as root it can chmod/chown that dir, which then
+#   blocks the HOST Termux process from writing new files to the host /tmp.
+#   Writing scripts directly to ${UBUNTU_ROOTFS}/tmp/ avoids the issue entirely:
+#   those files appear at /tmp/ inside proot without any bind-mount at all.
+#
+# HOW IT WORKS:
+#   Caller creates the script at  ${UBUNTU_ROOTFS}/tmp/setup.sh  (host path)
+#   ubuntu_cmd is called with     /tmp/setup.sh                  (Ubuntu path)
+#   proot sees the file via its native rootfs — no shared-tmp needed.
+#   Log lives in $HOME (guaranteed writable by the Termux user).
 ubuntu_cmd() {
     local message=$1
-    local script_file=$2
-    local log="/tmp/ubuntu_install.log"
-    (proot-distro login ubuntu --shared-tmp -- bash "$script_file" >> "$log" 2>&1) &
+    local script_file=$2          # path INSIDE Ubuntu (e.g. /tmp/ubuntu_base_setup.sh)
+    local log="${INSTALL_LOG}"
+    (proot-distro login ubuntu -- bash "$script_file" >> "$log" 2>&1) &
     spinner "$!" "$message"
     local result=$?
     if [ $result -ne 0 ]; then
@@ -109,7 +127,7 @@ ubuntu_cmd() {
         tail -5 "$log" 2>/dev/null | while IFS= read -r line; do
             echo -e "    ${GRAY}${line}${NC}"
         done
-        echo -e "  ${GRAY}Full log: cat /tmp/ubuntu_install.log${NC}"
+        echo -e "  ${GRAY}Full log: cat ${INSTALL_LOG}${NC}"
     fi
     return $result
 }
@@ -240,7 +258,7 @@ step_ubuntu_base() {
     echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Configuring Ubuntu system...${NC}"
     echo ""
 
-    cat > /tmp/ubuntu_base_setup.sh << 'INNEREOF'
+    cat > "${UBUNTU_ROOTFS}/tmp/ubuntu_base_setup.sh" << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
 export DEBCONF_NOWARNINGS=yes
@@ -267,7 +285,7 @@ update-locale LANG=en_US.UTF-8
 INNEREOF
 
     ubuntu_cmd "Updating Ubuntu and configuring system..." /tmp/ubuntu_base_setup.sh
-    rm -f /tmp/ubuntu_base_setup.sh
+    rm -f "${UBUNTU_ROOTFS}/tmp/ubuntu_base_setup.sh"
 }
 
 # ============== STEP 8: UBUNTU DESKTOP APPS ==============
@@ -276,7 +294,7 @@ step_ubuntu_desktop() {
     echo -e "${PURPLE}[Step ${CURRENT_STEP}/${TOTAL_STEPS}] Installing desktop environment and apps...${NC}"
     echo ""
 
-    cat > /tmp/ubuntu_desktop_setup.sh << 'INNEREOF'
+    cat > "${UBUNTU_ROOTFS}/tmp/ubuntu_desktop_setup.sh" << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
 export DEBCONF_NOWARNINGS=yes
@@ -319,17 +337,17 @@ INNEREOF
 
     ubuntu_cmd "Installing XFCE4 desktop (core session)..." /tmp/ubuntu_desktop_setup.sh
     local xfce4_result=$?
-    rm -f /tmp/ubuntu_desktop_setup.sh
+    rm -f "${UBUNTU_ROOTFS}/tmp/ubuntu_desktop_setup.sh"
 
     # External verification — shows clearly whether XFCE4 is ready to launch
-    local verify_script="/tmp/ubuntu_xfce4_verify.sh"
-    cat > "$verify_script" << 'VERIFYEOF'
+    # Write the check script into Ubuntu's rootfs (host path), run at Ubuntu path
+    cat > "${UBUNTU_ROOTFS}/tmp/ubuntu_xfce4_verify.sh" << 'VERIFYEOF'
 #!/bin/bash
-command -v startxfce4 >/dev/null 2>&1
+command -v xfce4-session >/dev/null 2>&1
 VERIFYEOF
 
-    if proot-distro login ubuntu --shared-tmp -- bash "$verify_script" > /dev/null 2>&1; then
-        echo -e "  ${GREEN}✓${NC} XFCE4 ready — startxfce4 found inside Ubuntu"
+    if proot-distro login ubuntu -- bash /tmp/ubuntu_xfce4_verify.sh > /dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} XFCE4 ready — xfce4-session found inside Ubuntu"
     else
         echo -e "  ${RED}✗${NC} XFCE4 not found inside Ubuntu!"
         echo ""
@@ -337,18 +355,18 @@ VERIFYEOF
         echo -e "  ${GRAY}  proot-distro login ubuntu${NC}"
         echo -e "  ${GRAY}  apt-get install -y --no-install-recommends xfce4-session xfwm4 xfce4-panel xfce4-settings xfdesktop4 dbus-x11${NC}"
         echo ""
-        echo -e "  ${GRAY}Install log: cat /tmp/ubuntu_install.log${NC}"
+        echo -e "  ${GRAY}Install log: cat ${INSTALL_LOG}${NC}"
     fi
-    rm -f "$verify_script"
+    rm -f "${UBUNTU_ROOTFS}/tmp/ubuntu_xfce4_verify.sh"
 
-    cat > /tmp/ubuntu_firefox_setup.sh << 'INNEREOF'
+    cat > "${UBUNTU_ROOTFS}/tmp/ubuntu_firefox_setup.sh" << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
 apt install -y firefox
 INNEREOF
 
     ubuntu_cmd "Installing Firefox..." /tmp/ubuntu_firefox_setup.sh
-    rm -f /tmp/ubuntu_firefox_setup.sh
+    rm -f "${UBUNTU_ROOTFS}/tmp/ubuntu_firefox_setup.sh"
 }
 
 # ============== STEP 9: DEV TOOLS + SERVICES ==============
@@ -358,17 +376,17 @@ step_ubuntu_services() {
     echo ""
 
     # Python 3
-    cat > /tmp/ubuntu_python_setup.sh << 'INNEREOF'
+    cat > "${UBUNTU_ROOTFS}/tmp/ubuntu_python_setup.sh" << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
-apt install -y python3 python3-pip python3-venv
+apt-get install -y -q --no-install-recommends python3 python3-pip python3-venv
 INNEREOF
 
     ubuntu_cmd "Installing Python 3..." /tmp/ubuntu_python_setup.sh
-    rm -f /tmp/ubuntu_python_setup.sh
+    rm -f "${UBUNTU_ROOTFS}/tmp/ubuntu_python_setup.sh"
 
     # VS Code (Microsoft ARM64 repo)
-    cat > /tmp/ubuntu_vscode_setup.sh << 'INNEREOF'
+    cat > "${UBUNTU_ROOTFS}/tmp/ubuntu_vscode_setup.sh" << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
 wget -qO- https://packages.microsoft.com/keys/microsoft.asc \
@@ -376,18 +394,18 @@ wget -qO- https://packages.microsoft.com/keys/microsoft.asc \
 echo "deb [arch=arm64 signed-by=/usr/share/keyrings/microsoft-archive-keyring.gpg] \
 https://packages.microsoft.com/repos/code stable main" \
     > /etc/apt/sources.list.d/vscode.list
-apt update -y
-apt install -y code
+apt-get update -y -q
+apt-get install -y -q code
 INNEREOF
 
     ubuntu_cmd "Installing VS Code..." /tmp/ubuntu_vscode_setup.sh
-    rm -f /tmp/ubuntu_vscode_setup.sh
+    rm -f "${UBUNTU_ROOTFS}/tmp/ubuntu_vscode_setup.sh"
 
     # OpenSSH
-    cat > /tmp/ubuntu_ssh_setup.sh << 'INNEREOF'
+    cat > "${UBUNTU_ROOTFS}/tmp/ubuntu_ssh_setup.sh" << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
-apt install -y openssh-server
+apt-get install -y -q --no-install-recommends openssh-server
 mkdir -p /run/sshd
 # Configure SSH: allow root, change default port to 2222 to avoid Android conflicts
 sed -i 's/#Port 22/Port 2222/' /etc/ssh/sshd_config
@@ -395,17 +413,17 @@ sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd
 INNEREOF
 
     ubuntu_cmd "Installing OpenSSH (port 2222)..." /tmp/ubuntu_ssh_setup.sh
-    rm -f /tmp/ubuntu_ssh_setup.sh
+    rm -f "${UBUNTU_ROOTFS}/tmp/ubuntu_ssh_setup.sh"
 
     # Bluetooth
-    cat > /tmp/ubuntu_bt_setup.sh << 'INNEREOF'
+    cat > "${UBUNTU_ROOTFS}/tmp/ubuntu_bt_setup.sh" << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
-apt install -y bluetooth bluez blueman
+apt-get install -y -q --no-install-recommends bluetooth bluez blueman
 INNEREOF
 
     ubuntu_cmd "Installing Bluetooth (bluez + blueman)..." /tmp/ubuntu_bt_setup.sh
-    rm -f /tmp/ubuntu_bt_setup.sh
+    rm -f "${UBUNTU_ROOTFS}/tmp/ubuntu_bt_setup.sh"
 }
 
 # ============== STEP 10: LAUNCHERS + SHORTCUTS ==============
@@ -469,11 +487,24 @@ echo "  🔊 Audio is enabled!"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Launch Ubuntu XFCE4
-# Use bash --login so /etc/profile is sourced and PATH includes /usr/bin
-proot-distro login ubuntu --shared-tmp -- \
-    bash --login -c "export DISPLAY=:1; export PULSE_SERVER=127.0.0.1; startxfce4" \
-    || echo -e "\n⚠ XFCE4 exited unexpectedly. Check: cat ~/.xsession-errors"
+# Launch Ubuntu XFCE4 desktop
+# ─────────────────────────────────────────────────────────────────────────────
+# WHY NOT startxfce4:
+#   startxfce4 is a wrapper that tries to start its OWN X server via xinit.
+#   Since Termux-X11 is already running on :1, startxfce4 errors:
+#     "X server already running on display :1"
+#   We do NOT want to start a new X server — we want to connect to the existing one.
+#
+# CORRECT APPROACH: run xfce4-session directly with dbus-launch.
+#   dbus-launch creates a D-Bus session bus and starts xfce4-session inside it.
+#   xfce4-session handles starting xfwm4, xfce4-panel, xfdesktop, etc. itself.
+# ─────────────────────────────────────────────────────────────────────────────
+proot-distro login ubuntu -- \
+    bash --login -c "
+        export DISPLAY=:1
+        export PULSE_SERVER=127.0.0.1
+        exec dbus-launch --exit-with-session xfce4-session
+    " || echo -e "\n⚠ XFCE4 exited unexpectedly. Check: cat ~/.xsession-errors"
 LAUNCHEREOF
 
     chmod +x ~/start-ubuntu.sh
@@ -494,7 +525,7 @@ STOPEOF
     echo -e "  ${GREEN}✓${NC} Created ~/stop-ubuntu.sh"
 
     # --- Ubuntu-side desktop shortcuts ---
-    cat > /tmp/ubuntu_shortcuts_setup.sh << 'INNEREOF'
+    cat > "${UBUNTU_ROOTFS}/tmp/ubuntu_shortcuts_setup.sh" << 'INNEREOF'
 #!/bin/bash
 mkdir -p /root/Desktop
 
@@ -552,7 +583,7 @@ chmod +x /root/Desktop/*.desktop
 INNEREOF
 
     ubuntu_cmd "Creating desktop shortcuts..." /tmp/ubuntu_shortcuts_setup.sh
-    rm -f /tmp/ubuntu_shortcuts_setup.sh
+    rm -f "${UBUNTU_ROOTFS}/tmp/ubuntu_shortcuts_setup.sh"
 }
 
 # ============== COMPLETION ==============
