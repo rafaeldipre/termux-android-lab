@@ -261,14 +261,25 @@ step_ubuntu_desktop() {
     cat > /tmp/ubuntu_desktop_setup.sh << 'INNEREOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
-apt install -y \
-    xfce4 xfce4-terminal xfce4-notifyd xfce4-screensaver \
-    thunar mousepad \
-    fonts-noto fonts-liberation fonts-dejavu \
+# Install XFCE4 components individually with --no-install-recommends to avoid
+# pulling in xserver-xorg-* packages (not needed: Termux-X11 is the display server)
+apt install -y --no-install-recommends \
+    xfce4-session \
+    xfwm4 \
+    xfce4-panel \
+    xfce4-settings \
+    xfdesktop4 \
+    xfce4-terminal \
+    xfce4-notifyd \
+    thunar \
+    mousepad \
+    dbus-x11 \
+    at-spi2-core \
+    fonts-dejavu \
     adwaita-icon-theme
 INNEREOF
 
-    ubuntu_cmd "Installing XFCE4 desktop..." /tmp/ubuntu_desktop_setup.sh
+    ubuntu_cmd "Installing XFCE4 desktop (minimal, no X server)..." /tmp/ubuntu_desktop_setup.sh
     rm -f /tmp/ubuntu_desktop_setup.sh
 
     cat > /tmp/ubuntu_firefox_setup.sh << 'INNEREOF'
