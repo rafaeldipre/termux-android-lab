@@ -228,6 +228,30 @@ curl -sL https://raw.githubusercontent.com/rafaeldipre/termux-android-lab/main/u
 
 ---
 
+## 🐧 Ubuntu Desktop — Engineering Notes
+
+This section documents the non-obvious technical problems solved during development. Useful if you're building something similar or want to understand why the installer does what it does.
+
+### Bugs fixed
+
+| # | Symptom | Root cause | Fix |
+|---|---------|-----------|-----|
+| 1 | `apt` hangs at ~50% during XFCE4 install | `dpkg` post-install scripts call `invoke-rc.d` to start services; no init system in proot → infinite wait | Added `/usr/sbin/policy-rc.d` returning `101` before any `apt-get` call |
+| 2 | `Permission denied` on `/tmp` for Firefox, VS Code, SSH, Bluetooth | Setup scripts were written to Android's `/tmp`; after `apt` modifies `$TMPDIR` permissions the path became inaccessible | Removed `--shared-tmp`; setup scripts written to `$UBUNTU_ROOTFS/tmp/` instead |
+| 3 | `xfce4-session: Cannot open display: .` (D-Bus error) | `/etc/machine-id` created empty by `base-files`; `systemd` fills it on first boot but never runs in proot; `dbus-daemon` aborts without a valid UUID | Added `dbus-uuidgen > /etc/machine-id` in base setup after `dbus-x11` install |
+| 4 | `xfce4-session: Cannot open display: .` (env corruption) | `proot-distro login ubuntu -- bash --login -c '...'` sources `/etc/profile.d/` login scripts that can overwrite `DISPLAY` before `dbus-launch` passes env to `xfce4-session` | Replaced inline command with a standalone script at `/usr/local/bin/ubuntu-desktop-start.sh`; called as `proot-distro login ubuntu -- /script.sh` (no login shell) |
+| 5 | `xfce4-session: Cannot open display: .` (socket missing) | Termux-X11 creates its unix socket at `$TMPDIR/.X11-unix/X1`; without `--shared-tmp` proot's `/tmp` has no X11 sockets so `DISPLAY=:1` cannot connect | Added `--bind $TMPDIR/.X11-unix:/tmp/.X11-unix` to the `proot-distro login` call |
+| 6 | VS Code `gpg` conflict on re-install | Second install finds both `microsoft-archive-keyring.gpg` and `microsoft.gpg`; `apt` refuses conflicting signed-by values | Idempotency check (`command -v code`); clean all conflicting keyring/source files before re-adding; `gpg --batch --yes` |
+
+### Key architectural constraints
+
+- **No `--shared-tmp`** — sharing Termux's `$TMPDIR` as Ubuntu's `/tmp` breaks when `apt` changes tmpdir permissions mid-install. X11 socket access is solved with a targeted `--bind` instead.
+- **`policy-rc.d` is mandatory** — without it, every package that ships a systemd service (dbus, bluetooth, ssh, …) will attempt a service start via `invoke-rc.d` and hang forever.
+- **`dbus-run-session` over `dbus-launch`** — `dbus-launch --exit-with-session` forks `xfce4-session` which inherits a potentially polluted environment from the login shell. `dbus-run-session` execs the child directly with a clean environment.
+- **machine-id must be generated at install time** — dbus-daemon refuses to start with an empty `/etc/machine-id`.
+
+---
+
 ## 🔧 Changes from the Original
 
 The following modifications were applied to [jarvesusaram99/termux-hacklab](https://github.com/jarvesusaram99/termux-hacklab):
