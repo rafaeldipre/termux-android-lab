@@ -330,7 +330,9 @@ apt-get install -y -q --no-install-recommends \
     thunar \
     mousepad \
     fonts-dejavu-core \
-    adwaita-icon-theme
+    adwaita-icon-theme \
+    xfce4-backdrops \
+    tumbler
 
 # ── PART 3: Developer essentials ────────────────────────────────────────────
 apt-get install -y -q --no-install-recommends \
@@ -425,6 +427,12 @@ https://packages.microsoft.com/repos/code stable main" \
     > /etc/apt/sources.list.d/vscode.list
 apt-get update -y -q
 apt-get install -y -q code
+# VS Code's post-install script auto-creates a sources list with a different
+# keyring path (microsoft.gpg) that conflicts with ours. Overwrite it.
+rm -f /etc/apt/sources.list.d/vscode.list~
+echo "deb [arch=arm64 signed-by=/usr/share/keyrings/microsoft-archive-keyring.gpg] \
+https://packages.microsoft.com/repos/code stable main" \
+    > /etc/apt/sources.list.d/vscode.list
 INNEREOF
 
     ubuntu_cmd "Installing VS Code..." /tmp/ubuntu_vscode_setup.sh
@@ -499,6 +507,8 @@ export DISPLAY=:1
 export PULSE_SERVER=127.0.0.1
 export GDK_BACKEND=x11
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# Suppress AT-SPI accessibility bus warnings (service not available in proot)
+export NO_AT_BRIDGE=1
 
 # ── D-Bus machine-id ────────────────────────────────────────────────────────
 # base-files creates /etc/machine-id empty; systemd would fill it on first boot
