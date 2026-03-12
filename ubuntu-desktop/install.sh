@@ -559,9 +559,11 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 # Launch Ubuntu XFCE4 via the startup script inside the Ubuntu rootfs.
-# The script sets DISPLAY=:1 at its very first line — no bash --login
-# env interference, no dbus-launch arg-passing issues.
-proot-distro login ubuntu -- /usr/local/bin/ubuntu-desktop-start.sh \
+# --bind $TMPDIR/.X11-unix:/tmp/.X11-unix mounts the Termux-X11 unix socket
+# into the proot container so DISPLAY=:1 inside Ubuntu can reach the X server.
+proot-distro login ubuntu \
+    --bind "\$TMPDIR/.X11-unix:/tmp/.X11-unix" \
+    -- /usr/local/bin/ubuntu-desktop-start.sh \
     || echo -e "\n⚠ XFCE4 exited unexpectedly. Check: cat ~/.xsession-errors"
 LAUNCHEREOF
 
